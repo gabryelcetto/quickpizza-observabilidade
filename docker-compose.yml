@@ -1,0 +1,82 @@
+services:
+  quickpizza:
+    build: ./app            # usa o Dockerfile do QuickPizza (pasta app/)
+    container_name: quickpizza
+    ports:
+      - "3333:3333"
+    restart: unless-stopped
+    networks:
+      - monitoramento
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 2g
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: cadvisor
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - monitoramento
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    networks:
+      - monitoramento
+    depends_on:
+      - cadvisor
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+    networks:
+      - monitoramento
+    depends_on:
+      - prometheus
+
+  uptime-kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    ports:
+      - "3001:3001"
+    restart: unless-stopped
+    volumes:
+      - kuma_data:/app/data
+    networks:
+      - monitoramento
+
+networks:
+  monitoramento:
+    driver: bridge
+
+volumes:
+  prometheus_data:
+  grafana_data:
+  kuma_data:
