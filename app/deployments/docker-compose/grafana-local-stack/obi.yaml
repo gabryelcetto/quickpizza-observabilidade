@@ -1,0 +1,49 @@
+# OBI (OpenTelemetry eBPF Instrumentation) routes config.
+#
+# Excludes noisy infrastructure endpoints from OBI's captured spans/metrics: GET /metrics
+# (scraped every few seconds by Prometheus/Alloy) and GET /debug/pprof/* (scraped by
+# Pyroscope in pull mode - see pkg/http/http.go's NewServer). These are already excluded from
+# the app's own OTel SDK in "sdk" mode (see isInternalRoute in pkg/http/http.go), but that
+# exclusion is app-side router structure and has no effect on OBI: OBI captures HTTP traffic
+# via eBPF at the socket level, independent of which chi router group handled the request, so
+# it needs its own, separate exclusion here. See docs/otel.md.
+#
+# ignore_mode: all excludes matching routes from both traces and metrics (as opposed to just
+# "traces" or just "metrics").
+routes:
+  ignore_mode: all
+  ignored_patterns:
+    - /metrics
+    # /debug/pprof/* alone does not match the bare "/debug/pprof/" path itself (glob "*"
+    # requires at least one more character after the trailing slash) - verified live: without
+    # this literal entry, GET /debug/pprof/ (pyroscope's index page fetch) still showed up as
+    # a trace even with /debug/pprof/* configured. Pyroscope also scrapes sub-paths like
+    # /debug/pprof/goroutine, /debug/pprof/allocs, etc., which /debug/pprof/* does cover.
+    - /debug/pprof/
+    - /debug/pprof/*
+
+# Log enricher: injects trace_id/span_id into the app's own JSON logs (written to stdout via
+# slog) in place, for the request-handling thread of an active traced span. OBI never exports
+# logs itself - Alloy's existing log pipeline would pick up the now-enriched lines unchanged.
+# See https://opentelemetry.io/docs/zero-code/obi/trace-log-correlation/ and docs/otel.md.
+#
+# Schema verified against the v1.0.0 binary: each `services` entry needs a `service:` key
+# holding a LIST of selectors. The bare `- open_ports: "3333"` form (accepted by v0.13.0)
+# still parses on v1.0.0 but silently selects nothing, so no logs are enriched
+# (`logenricher=false` in OBI's "instrumenting process" log line, 0 of 360 request log lines
+# enriched in a live run).
+#
+# Verified live on v1.0.0 (compose, Docker Desktop): 100% of request log lines were enriched
+# across 100 requests per endpoint, including sub-millisecond ones (the duration-dependent
+# enrichment race seen on v0.13.0 is gone). OBI still logs "OBI will use process-internal maps"
+# because bpffs isn't mounted, which only disables pinned-map features such as profile
+# correlation; the log enricher doesn't need them. The enricher turns on trace context
+# population itself, so `ebpf.populate_trace_context` isn't needed.
+#
+# There is no `enabled` field: the enricher is active whenever `services` is non-empty. To turn
+# it off, comment out this whole block.
+ebpf:
+  log_enricher:
+    services:
+      - service:
+          - open_ports: "3333"
